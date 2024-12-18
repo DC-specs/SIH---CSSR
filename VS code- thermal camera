@@ -1,0 +1,93 @@
+import serial
+import numpy as np
+import json
+import cv2
+import threading
+from time import sleep, time    
+
+# Initialize serial communication (change 'COM7' to the appropriate port)
+try:
+    ser = serial.Serial('COM5', 9600, timeout=1)  # Adjust port if necessary
+    print("Serial connection established")
+except serial.SerialException as e:
+    print(f"Error opening serial port: {e}")
+    exit()
+
+# Shared variable to hold the latest thermal data
+latest_data = None
+data_lock = threading.Lock()
+
+# Frame rate control variables
+FPS = 30
+frame_delay = 1.0 / FPS
+
+def read_serial_data():
+    global latest_data
+    while True:
+        try:
+            if ser.in_waiting > 0:
+                line = ser.readline().decode('utf-8').strip()
+                if line:
+                    print(f"Serial Data: {line}")  # Debugging print
+                    data = json.loads(line)
+                    with data_lock:
+                        latest_data = data['pixels']
+                        print("Data received and parsed")  # Debugging print
+        except (json.JSONDecodeError, serial.SerialException) as e:
+            print(f"Error reading serial data: {e}")
+        sleep(0.01)  # Small delay to prevent overloading CPU
+
+def update_plot():
+    global latest_data
+    cv2.namedWindow('Thermal Image', cv2.WINDOW_NORMAL)
+    cv2.setWindowProperty('Thermal Image', cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+
+    prev_time = time()  # Track the time for FPS control
+
+    while True:
+        if latest_data is not None:
+            with data_lock:
+                data = latest_data  # Fetch the latest data safely
+            thermal_data = np.array(data).reshape(8, 8)
+
+            print(f"Thermal Data: {thermal_data}")  # Debugging print
+
+            # Resize using bicubic interpolation to smooth out the pixelation
+            thermal_data_resized = cv2.resize(thermal_data, (240, 240), interpolation=cv2.INTER_CUBIC)
+            
+            # Normalize and convert to uint8 for display
+            thermal_data_normalized = cv2.normalize(thermal_data_resized, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+
+            # Apply colormap and optionally add Gaussian blur to smooth out sharp pixel edges
+            thermal_colormap = cv2.applyColorMap(thermal_data_normalized, cv2.COLORMAP_JET)
+            thermal_colormap_blurred = cv2.GaussianBlur(thermal_colormap, (5, 5), 0)  # Adjust kernel size for smoothing
+
+            # Resize to full-screen
+            thermal_colormap_resized = cv2.resize(thermal_colormap_blurred, (1920, 1080), interpolation=cv2.INTER_CUBIC)
+
+            # Show the image using OpenCV
+            cv2.imshow('Thermal Image', thermal_colormap_resized)
+
+            # Frame rate control: Sleep to maintain the target FPS
+            elapsed_time = time() - prev_time
+            if elapsed_time < frame_delay:
+                sleep(frame_delay - elapsed_time)
+            prev_time = time()
+
+            # Exit on pressing the 'Esc' key
+            if cv2.waitKey(1) & 0xFF == 27:
+                break
+        else:
+            print("No data available yet...")  # Debugging print
+            sleep(0.01)  # Small delay to prevent overloading CPU
+
+# Start the serial reading thread
+serial_thread = threading.Thread(target=read_serial_data, daemon=True)
+serial_thread.start()
+
+# Start the plotting thread
+update_plot()
+
+# Cleanup
+ser.close()
+cv2.destroyAllWindows()  # Close all OpenCV windows
