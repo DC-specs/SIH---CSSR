@@ -1,0 +1,108 @@
+#include <SoftwareSerial.h>
+#include "MHZ19.h"
+
+// ********** Configuration **********
+
+// MH-Z19E Sensor Configuration
+const int MHZ19_RX_PIN = 10; // Arduino receives data on pin 10
+const int MHZ19_TX_PIN = 11; // Arduino transmits data on pin 11
+
+SoftwareSerial mySerial(MHZ19_RX_PIN, MHZ19_TX_PIN); // RX, TX
+MHZ19 myMHZ19;
+
+// MQ-2 Sensor Configuration
+const int MQ2_AO_PIN = A0; // Analog output pin connected to Analog Pin A0
+
+// Load Resistor for MQ-2 (in kilo-ohms)
+const float RL = 10.0; // 10kΩ
+
+// Baseline resistance R0 (determined from calibration in clean air)
+const float R0 = 4.286; // Replace with your calibrated R0 in kΩ
+
+// Calibration constants for VOC (example values; adjust based on calibration)
+const float m = -0.47; // Slope from log-log plot
+const float b = 1.60;  // Intercept from log-log plot
+
+// ********** Setup Function **********
+void setup() {
+  // Initialize Serial Monitor
+  Serial.begin(9600);
+  Serial.println("Initializing Sensors...");
+
+  // Initialize SoftwareSerial for MH-Z19E
+  mySerial.begin(9600);
+  Serial.println("SoftwareSerial for MH-Z19E started at 9600 baud");
+
+  // Initialize MH-Z19E
+  myMHZ19.begin(mySerial);
+  Serial.println("MH-Z19E library initialized");
+
+  // Optional: Set MH-Z19E Configurations
+  // myMHZ19.autoCalibration(false); // Disable auto calibration if needed
+  // myMHZ19.setRange(2000); // Set range to 2000 ppm
+
+  // Give some time for sensors to initialize
+  delay(5000); // Increased delay for sensor warm-up
+  Serial.println("Sensors Initialized Successfully!\n");
+}
+
+// ********** Loop Function **********
+void loop() {
+  // ********** Read CO₂ Levels from MH-Z19E **********
+  int co2 = myMHZ19.getCO2();
+
+  // Handle CO2 reading
+  if (co2 == -1) {
+    Serial.print("CO2 ");
+    Serial.print(0); // Assign 0 ppm if reading fails
+  } else {
+    Serial.print("CO2 ");
+    Serial.print(co2);
+  }
+
+  // ********** Read VOC Concentration from MQ-2 **********
+  int mq2AnalogValue = analogRead(MQ2_AO_PIN);
+  float voltage = mq2AnalogValue * (5.0 / 1023.0); // Convert analog value to voltage
+
+  // Calculate Rs (Sensor Resistance)
+  float Vs = voltage;
+  float Rs = RL * (5.0 - Vs) / Vs; // Rs in kΩ
+
+  // Calculate Rs/R0
+  float ratio = Rs / R0;
+
+  // Calculate VOC concentration using the calibration equation
+  // log(PPM) = m * log(Rs/R0) + b
+  // Therefore, PPM = 10^(m * log10(Rs/R0) + b)
+  float logRatio = log10(ratio);
+  float logPPM = m * logRatio + b;
+  float voc_ppm = pow(10, logPPM);
+
+  // Handle VOC reading
+  if (voc_ppm < 0 || voc_ppm > 10000) { // Simple validation
+    voc_ppm = 0; // Assign 0 ppm if reading is out of expected range
+  }
+
+  // Print VOC concentration
+  Serial.print(" VOC ");
+  Serial.println(voc_ppm, 2);
+
+  // ********** Debugging Outputs **********
+  /*
+  // Uncomment the following lines for additional debugging information
+  Serial.print("DEBUG - Rs: ");
+  Serial.print(Rs);
+  Serial.print(" kΩ | Ratio: ");
+  Serial.print(ratio);
+  Serial.print(" | logRatio: ");
+  Serial.print(logRatio, 2);
+  Serial.print(" | logPPM: ");
+  Serial.print(logPPM, 2);
+  Serial.print(" | Calculated VOC: ");
+  Serial.print(voc_ppm, 2);
+  Serial.println(" ppm");
+  */
+
+  // ********** Delay **********
+  delay(500); // Wait for 500 milliseconds before the next reading
+}
